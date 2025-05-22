@@ -1,0 +1,75 @@
+# Python bytecode and build
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
+
+# Virtual environment
+venv/
+.venv/                # added common venv name
+.env
+*.env
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS-generated
+.DS_Store
+Thumbs.db
+
+# Logs and runtime files
+*.log
+*.pid
+*.gz
+pipeline.log
+test_runner.log
+test_validation.log
+validation.log
+
+# Video output and temp data
+downloads/
+failed/
+processed/
+output/
+temp/
+debug_frames/
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Test artifacts
+.coverage
+htmlcov/
+.cache/
+.pytest_cache/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Optional cloud SDK state (if used)
+.boto
+.gcloud/
+.azure/
+
+# ------------------------
+# Additional ignores below
+# ------------------------
+
+# Local config & secrets
+config.json
+
+# Archive files
+*.zip
+
+# State files
+batch_state.json
+state.json
+
+# Placeholder files you do want to keep
+#downloads/.gitkeep

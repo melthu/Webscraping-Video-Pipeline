@@ -1,0 +1,40 @@
+# Core dependencies
+requests==2.31.0
+beautifulsoup4==4.12.2
+python-dotenv==1.0.0
+tqdm==4.66.1
+validators==0.22.0
+numpy==1.26.2
+# pillow==10.1.0 - Removed as it's not used in the project and has compatibility issues with Python 3.13
+
+# Video processing
+opencv-python==4.8.1.78
+ffmpeg-python==0.2.0
+pytesseract==0.3.10
+moviepy==1.0.3
+
+# Web scraping
+selenium==4.15.2
+pytube==15.0.0
+pexels-api==1.0.1
+internetarchive==3.5.0
+# wikimedia-commons package not available, using requests directly
+
+# Cloud storage
+boto3==1.29.6
+google-cloud-storage==2.13.0
+azure-storage-blob==12.18.3
+
+# Caching and performance
+redis==5.0.1
+
+# Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+responses==0.24.1
+mock==5.1.0
+
+# Utilities
+pyyaml==6.0.1
+tenacity==8.2.3
