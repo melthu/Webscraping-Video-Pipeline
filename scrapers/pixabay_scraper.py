@@ -232,7 +232,7 @@ class PixabayScraper(BaseScraper):
         try:
             self.logger.info(f"Downloading Pixabay video from {video_url}")
             
-            # If the “URL” is actually a local file path, just copy it
+            # If the "URL" is actually a local file path, just copy it
             if os.path.exists(video_url):
                 shutil.copy(video_url, output_path)
                 self.logger.info(f"Copied local video from {video_url} to {output_path}")

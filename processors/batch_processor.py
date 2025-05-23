@@ -77,17 +77,34 @@ class BatchProcessor:
         """Register a scraper for a specific source."""
         self.scrapers[name] = scraper
     
-    def process_batch(self, source: str, query: str, max_videos: int = 100) -> Dict[str, Any]:
+    def process_batch(
+        self,
+        source: str,
+        query: str = "nature",
+        batch_size: int = 10,
+        target_hours: float = 1.0,
+        output_destination: str = "local",
+        batch_id: Optional[str] = None,
+        max_workers: Optional[int] = None,
+        max_scrapers: Optional[int] = None,
+        config_override: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
         Process a batch of videos from a specific source.
         
         Args:
-            source: Source name (must match a registered scraper)
-            query: Search query for the source
-            max_videos: Maximum number of videos to process
-            
+            source: Source name (must match a registered scraper).
+            query: Search query string for videos (default: "nature").
+            batch_size: Number of videos to process per batch (default: 10).
+            target_hours: Target number of hours of video to collect (default: 1.0).
+            output_destination: Where to store output, either 'local' or 'cloud' (default: "local").
+            batch_id: Optional batch identifier to resume or identify the batch.
+            max_workers: Maximum number of parallel worker threads to use (default: from config or None).
+            max_scrapers: Maximum number of parallel scrapers to use (default: None).
+            config_override: Optional dictionary to override configuration for this batch run.
+        
         Returns:
-            Dictionary with batch processing results
+            Dictionary with batch processing results.
         """
         if source not in self.scrapers:
             return {"success": False, "error": f"No scraper registered for source: {source}"}

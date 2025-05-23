@@ -8,6 +8,7 @@ import time
 import json
 from typing import List, Dict, Any, Optional
 import requests
+from bs4 import BeautifulSoup
 from scrapers.base_scraper import BaseScraper
 
 logger = logging.getLogger(__name__)
@@ -40,8 +41,9 @@ class NOAAScraper(BaseScraper):
         
         # Set up headers for web requests
         self.headers = {
-            "User-Agent": "AfterQuery Video Collection Pipeline/1.0",
-            "Accept": "application/json, text/plain, */*"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9"
         }
         
         # Rate limiting settings
@@ -86,22 +88,67 @@ class NOAAScraper(BaseScraper):
             if not response:
                 self.logger.warning(f"No response from NOAA search for query '{query}' on page {page}")
                 return []
-                
-            # Handle 403 Forbidden errors by using a more browser-like User-Agent
-            if response.status_code == 403:
-                enhanced_headers = self.headers.copy()
-                enhanced_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-                response = self._make_request(self.search_url, headers=enhanced_headers, params=params)
-                if not response:
-                    self.logger.warning(f"Still no response from NOAA search after retry with enhanced headers")
-                    return []
             
             try:
                 data = response.json()
+                
+                # Process JSON response
+                if not data or "items" not in data:
+                    self.logger.warning(f"No videos found for query '{query}' on page {page}")
+                    return []
+                
+                # Transform the API response to our standard format
+                results = []
+                for item in data.get("items", []):
+                    try:
+                        # Skip if not a video
+                        if item.get("type") != "video":
+                            continue
+                        
+                        # Extract video ID and URL
+                        video_id = item.get("id", "")
+                        video_url = item.get("url", "")
+                        if not video_id or not video_url:
+                            continue
+                        
+                        # Make absolute URL if relative
+                        if video_url.startswith("/"):
+                            video_url = f"{self.base_url}{video_url}"
+                        
+                        # Get detailed metadata
+                        metadata = self._get_video_details(video_url)
+                        
+                        # Create standardized metadata
+                        video_metadata = {
+                            "id": video_id,
+                            "source": "noaa",
+                            "title": item.get("title", "NOAA Video"),
+                            "url": metadata.get("download_url", ""),
+                            "thumbnail": item.get("thumbnail", ""),
+                            "duration": metadata.get("duration", 0),
+                            "width": metadata.get("width", 0),
+                            "height": metadata.get("height", 0),
+                            "format": metadata.get("format", "mp4"),
+                            "user": "NOAA",
+                            "license": "Public Domain",  # NOAA content is typically public domain
+                            "original_url": video_url,
+                            "description": item.get("description", ""),
+                            "tags": item.get("tags", []) or [tag.strip() for tag in query.split(",") if tag.strip()]
+                        }
+                        
+                        # Only add if we have a valid video URL
+                        if video_metadata.get("url"):
+                            results.append(video_metadata)
+                            
+                    except Exception as e:
+                        self.logger.warning(f"Error processing video item: {str(e)}")
+                        continue
+                
+                return results
+                
             except json.JSONDecodeError:
                 # If not JSON, try to parse HTML
                 self.logger.warning("Response is not JSON, attempting to parse HTML")
-                from bs4 import BeautifulSoup
                 soup = BeautifulSoup(response.text, 'html.parser')
                 
                 # Extract video items from HTML
@@ -169,60 +216,6 @@ class NOAAScraper(BaseScraper):
                 
                 return results
             
-            # Process JSON response
-            if not data or "items" not in data:
-                self.logger.warning(f"No videos found for query '{query}' on page {page}")
-                return []
-            
-            # Transform the API response to our standard format
-            results = []
-            for item in data["items"]:
-                try:
-                    # Skip if not a video
-                    if item.get("type") != "video":
-                        continue
-                    
-                    # Extract video ID and URL
-                    video_id = item.get("id", "")
-                    video_url = item.get("url", "")
-                    if not video_id or not video_url:
-                        continue
-                    
-                    # Make absolute URL if relative
-                    if video_url.startswith("/"):
-                        video_url = f"{self.base_url}{video_url}"
-                    
-                    # Get detailed metadata
-                    metadata = self._get_video_details(video_url)
-                    
-                    # Create standardized metadata
-                    video_metadata = {
-                        "id": video_id,
-                        "source": "noaa",
-                        "title": item.get("title", "NOAA Video"),
-                        "url": metadata.get("download_url", ""),
-                        "thumbnail": item.get("thumbnail", ""),
-                        "duration": metadata.get("duration", 0),
-                        "width": metadata.get("width", 0),
-                        "height": metadata.get("height", 0),
-                        "format": metadata.get("format", "mp4"),
-                        "user": "NOAA",
-                        "license": "Public Domain",  # NOAA content is typically public domain
-                        "original_url": video_url,
-                        "description": item.get("description", ""),
-                        "tags": item.get("tags", []) or [tag.strip() for tag in query.split(",") if tag.strip()]
-                    }
-                    
-                    # Only add if we have a valid video URL
-                    if video_metadata.get("url"):
-                        results.append(video_metadata)
-                        
-                except Exception as e:
-                    self.logger.warning(f"Error processing video item: {str(e)}")
-                    continue
-            
-            return results
-            
         except Exception as e:
             self.logger.error(f"Error searching NOAA: {str(e)}")
             return []
@@ -247,7 +240,6 @@ class NOAAScraper(BaseScraper):
                 return {}
             
             # Parse the page content
-            from bs4 import BeautifulSoup
             soup = BeautifulSoup(response.text, 'html.parser')
             
             # Extract download URL
@@ -264,6 +256,26 @@ class NOAAScraper(BaseScraper):
                     if href and href.lower().endswith((".mp4", ".mov", ".avi")):
                         download_url = href
                         break
+            
+            # If still no download URL, look for video elements with src attribute
+            if not download_url:
+                video_element = soup.select_one("video")
+                if video_element:
+                    download_url = video_element.get("src", "")
+            
+            # If still no download URL, look for iframe with video source
+            if not download_url:
+                iframe = soup.select_one("iframe")
+                if iframe:
+                    iframe_src = iframe.get("src", "")
+                    if "video" in iframe_src.lower():
+                        # Try to get the video source from the iframe
+                        iframe_response = self._make_request(iframe_src, headers=self.headers)
+                        if iframe_response:
+                            iframe_soup = BeautifulSoup(iframe_response.text, 'html.parser')
+                            iframe_video = iframe_soup.select_one("video source")
+                            if iframe_video:
+                                download_url = iframe_video.get("src", "")
             
             # Make absolute URL if relative
             if download_url and download_url.startswith("/"):
@@ -391,7 +403,7 @@ class NOAAScraper(BaseScraper):
             self._rate_limit()
             
             # For NOAA, we can directly download the video from the URL
-            response = requests.get(video_url, stream=True, timeout=60, headers=self.headers)
+            response = requests.get(video_url, stream=True, timeout=60, headers=self.headers)  # Longer timeout for potentially large videos
             response.raise_for_status()
             
             with open(output_path, 'wb') as f:

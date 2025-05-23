@@ -1,25 +1,21 @@
 """
-Coverr web scraper implementation for video collection pipeline.
+Coverr scraper implementation for video collection pipeline.
 """
 
 import os
 import logging
 import time
 import json
-import re
 from typing import List, Dict, Any, Optional
 import requests
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+import re
 from scrapers.base_scraper import BaseScraper
 
 logger = logging.getLogger(__name__)
 
 class CoverrScraper(BaseScraper):
-    """Scraper for Coverr video platform using web scraping (no official API)."""
+    """Scraper for Coverr video content."""
     
     def __init__(self, config: Dict[str, Any]):
         """
@@ -34,22 +30,22 @@ class CoverrScraper(BaseScraper):
         # Coverr website URLs
         self.base_url = config.get("base_url", "https://coverr.co")
         self.search_url = config.get("search_url", "https://coverr.co/search")
+        self.api_url = config.get("api_url", "https://coverr.co/api/videos")
         
-        self.per_page = config.get("per_page", 20)  # Approximate number per page
+        self.per_page = config.get("per_page", 20)
         
         # Set up headers for web requests
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+            "Referer": "https://coverr.co/",
+            "Origin": "https://coverr.co"
         }
         
-        # Rate limiting settings - be respectful of the website
+        # Rate limiting settings
         self.request_delay = config.get("request_delay", 3.0)  # seconds between requests
         self.last_request_time = 0
-        
-        # Selenium driver for JavaScript-heavy pages
-        self.driver = None
     
     def _rate_limit(self):
         """Apply rate limiting to avoid overloading the website."""
@@ -62,22 +58,6 @@ class CoverrScraper(BaseScraper):
             time.sleep(sleep_time)
             
         self.last_request_time = time.time()
-    
-    def _init_selenium(self):
-        """Initialize Selenium WebDriver if not already initialized."""
-        if self.driver is None:
-            self.driver = self._setup_selenium(headless=True)
-            self.logger.info("Initialized Selenium WebDriver for Coverr scraping")
-    
-    def _close_selenium(self):
-        """Close Selenium WebDriver if initialized."""
-        if self.driver is not None:
-            try:
-                self.driver.quit()
-            except Exception as e:
-                self.logger.warning(f"Error closing Selenium WebDriver: {str(e)}")
-            finally:
-                self.driver = None
     
     def search_videos(self, query: str, page: int = 1) -> List[Dict[str, Any]]:
         """
@@ -92,113 +72,183 @@ class CoverrScraper(BaseScraper):
         """
         try:
             self._rate_limit()
-            self._init_selenium()
             
-            # Construct search URL with query
-            search_url = f"{self.search_url}?q={query}"
+            # Try API-based search first
+            api_results = self._search_api(query, page)
+            if api_results:
+                return api_results
+            
+            # Fall back to web scraping if API fails
+            self.logger.info("API search failed, falling back to web scraping")
+            return self._search_web(query, page)
+            
+        except Exception as e:
+            self.logger.error(f"Error searching Coverr: {str(e)}")
+            return []
+    
+    def _search_api(self, query: str, page: int = 1) -> List[Dict[str, Any]]:
+        """
+        Search for videos using Coverr API.
+        
+        Args:
+            query: Search term
+            page: Page number for pagination
+            
+        Returns:
+            List of video metadata dictionaries
+        """
+        try:
+            # Prepare API parameters
+            params = {
+                "q": query,
+                "page": page,
+                "per_page": self.per_page
+            }
+            
+            # Make API request
+            response = self._make_request(self.api_url, headers=self.headers, params=params)
+            if not response:
+                return []
+            
+            try:
+                data = response.json()
+            except json.JSONDecodeError:
+                self.logger.warning("Failed to parse API response as JSON")
+                return []
+            
+            # Extract videos from response
+            videos = data.get("videos", [])
+            if not videos:
+                return []
+            
+            # Transform the API response to our standard format
+            results = []
+            for video in videos:
+                video_id = video.get("id", "")
+                if not video_id:
+                    continue
+                
+                # Get video URL
+                video_files = video.get("video_files", [])
+                if not video_files:
+                    continue
+                
+                # Find the best quality video
+                best_video = None
+                best_width = 0
+                for video_file in video_files:
+                    width = video_file.get("width", 0)
+                    if width >= 512 and width > best_width:
+                        best_video = video_file
+                        best_width = width
+                
+                if not best_video:
+                    continue
+                
+                # Get video URL
+                video_url = best_video.get("link", "")
+                if not video_url:
+                    continue
+                
+                # Get thumbnail
+                thumbnail = ""
+                video_pictures = video.get("video_pictures", [])
+                if video_pictures:
+                    thumbnail = video_pictures[0].get("picture", "")
+                
+                # Create standardized metadata
+                metadata = {
+                    "id": video_id,
+                    "source": "coverr",
+                    "title": video.get("name", "Coverr Video"),
+                    "url": video_url,
+                    "thumbnail": thumbnail,
+                    "duration": video.get("duration", 0),
+                    "width": best_video.get("width", 0),
+                    "height": best_video.get("height", 0),
+                    "format": "mp4",
+                    "user": "Coverr",
+                    "license": "Coverr License",  # Coverr has its own license
+                    "original_url": f"https://coverr.co/videos/{video_id}",
+                    "description": video.get("description", ""),
+                    "tags": video.get("tags", [])
+                }
+                
+                results.append(metadata)
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Error in API search: {str(e)}")
+            return []
+    
+    def _search_web(self, query: str, page: int = 1) -> List[Dict[str, Any]]:
+        """
+        Search for videos by scraping Coverr website.
+        
+        Args:
+            query: Search term
+            page: Page number for pagination
+            
+        Returns:
+            List of video metadata dictionaries
+        """
+        try:
+            # Prepare search URL
+            search_url = f"{self.search_url}/{query}"
             if page > 1:
-                search_url += f"&page={page}"
+                search_url = f"{search_url}?page={page}"
             
-            # Load the search page
-            self.driver.get(search_url)
+            # Make request to search page
+            response = self._make_request(search_url, headers=self.headers)
+            if not response:
+                return []
             
-            # Wait for videos to load
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, ".coverr-grid-item"))
-            )
+            # Parse HTML
+            soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Scroll down to load more videos if needed
-            self._scroll_page()
-            
-            # Parse the page content
-            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-            
-            # Find all video items
-            video_items = soup.select(".coverr-grid-item")
+            # Find video elements
+            video_elements = soup.select(".grid-item")
             
             results = []
-            for item in video_items:
+            for element in video_elements:
                 try:
-                    # Extract video ID and title
-                    video_link = item.select_one("a")
-                    if not video_link:
+                    # Extract video ID and URL
+                    link = element.select_one("a")
+                    if not link:
                         continue
                     
-                    video_url = video_link.get("href", "")
-                    if not video_url or not video_url.startswith("/videos/"):
+                    href = link.get("href", "")
+                    if not href or "/videos/" not in href:
                         continue
                     
-                    video_id = video_url.split("/")[-1]
-                    title = item.select_one(".coverr-grid-item-title")
-                    title_text = title.text.strip() if title else video_id
+                    video_id = href.split("/videos/")[-1]
                     
-                    # Extract thumbnail
-                    thumbnail = ""
-                    img = item.select_one("img")
-                    if img:
-                        thumbnail = img.get("src", "")
-                    
-                    # Get detailed metadata by visiting the video page
-                    metadata = self._get_video_details(f"{self.base_url}{video_url}")
-                    
-                    # Skip if we couldn't get detailed metadata or if it's not free
-                    if not metadata or metadata.get("is_premium", False):
+                    # Get video details page
+                    video_metadata = self._get_video_details(video_id)
+                    if not video_metadata:
                         continue
-                    
-                    # Create standardized metadata
-                    video_metadata = {
-                        "id": video_id,
-                        "source": "coverr",
-                        "title": title_text,
-                        "url": metadata.get("download_url", ""),
-                        "thumbnail": thumbnail,
-                        "duration": metadata.get("duration", 0),
-                        "width": metadata.get("width", 0),
-                        "height": metadata.get("height", 0),
-                        "format": "mp4",  # Coverr videos are typically MP4
-                        "user": metadata.get("user", "Coverr"),
-                        "license": "Coverr License (Free for commercial use, no attribution required)",
-                        "original_url": f"{self.base_url}{video_url}",
-                        "tags": [tag.strip() for tag in query.split(",") if tag.strip()]
-                    }
                     
                     # Only add if we have a valid video URL
                     if video_metadata.get("url"):
                         results.append(video_metadata)
                         
                 except Exception as e:
-                    self.logger.warning(f"Error processing video item: {str(e)}")
+                    self.logger.warning(f"Error processing video element: {str(e)}")
                     continue
             
             return results
             
         except Exception as e:
-            self.logger.error(f"Error searching Coverr: {str(e)}")
+            self.logger.error(f"Error in web search: {str(e)}")
             return []
-        finally:
-            # Close Selenium WebDriver to free resources
-            self._close_selenium()
     
-    def _scroll_page(self, scroll_count: int = 3):
-        """
-        Scroll down the page to load more content.
-        
-        Args:
-            scroll_count: Number of times to scroll
-        """
-        try:
-            for _ in range(scroll_count):
-                self.driver.execute_script("window.scrollBy(0, window.innerHeight);")
-                time.sleep(1)  # Wait for content to load
-        except Exception as e:
-            self.logger.warning(f"Error scrolling page: {str(e)}")
-    
-    def _get_video_details(self, video_url: str) -> Dict[str, Any]:
+    def _get_video_details(self, video_id: str) -> Dict[str, Any]:
         """
         Get detailed metadata for a video by visiting its page.
         
         Args:
-            video_url: URL of the video page
+            video_id: Coverr video ID
             
         Returns:
             Dictionary with video metadata
@@ -206,82 +256,191 @@ class CoverrScraper(BaseScraper):
         try:
             self._rate_limit()
             
-            # Visit the video page
-            self.driver.get(video_url)
+            # Prepare video URL
+            video_url = f"{self.base_url}/videos/{video_id}"
             
-            # Wait for video player to load
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "video"))
-            )
+            # Make request to video page
+            response = self._make_request(video_url, headers=self.headers)
+            if not response:
+                return {}
             
-            # Parse the page content
-            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+            # Parse HTML
+            soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Check if it's a premium video
-            premium_badge = soup.select_one(".premium-badge")
-            is_premium = premium_badge is not None
+            # Extract video data from JSON-LD
+            json_ld = None
+            for script in soup.select("script[type='application/ld+json']"):
+                try:
+                    data = json.loads(script.string)
+                    if data.get("@type") == "VideoObject":
+                        json_ld = data
+                        break
+                except (json.JSONDecodeError, AttributeError):
+                    continue
             
-            # Extract download URL
-            download_url = ""
-            download_button = soup.select_one("a.download-button")
-            if download_button:
-                download_url = download_button.get("href", "")
+            # If JSON-LD not found, try to extract data from the page
+            if not json_ld:
+                # Extract download link
+                download_link = soup.select_one("a.download-button")
+                if not download_link:
+                    return {}
+                
+                download_url = download_link.get("href", "")
+                if not download_url:
+                    return {}
+                
+                # Extract title
+                title_elem = soup.select_one("h1")
+                title = title_elem.text.strip() if title_elem else "Coverr Video"
+                
+                # Extract thumbnail
+                thumbnail = ""
+                video_elem = soup.select_one("video")
+                if video_elem:
+                    poster = video_elem.get("poster", "")
+                    if poster:
+                        thumbnail = poster
+                
+                # Extract dimensions
+                width = 0
+                height = 0
+                if video_elem:
+                    width_str = video_elem.get("width", "0")
+                    height_str = video_elem.get("height", "0")
+                    try:
+                        width = int(width_str)
+                        height = int(height_str)
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Extract duration
+                duration = 0
+                duration_elem = soup.select_one(".video-duration")
+                if duration_elem:
+                    duration_text = duration_elem.text.strip()
+                    # Parse duration in format MM:SS
+                    if ":" in duration_text:
+                        try:
+                            minutes, seconds = duration_text.split(":")
+                            duration = int(minutes) * 60 + int(seconds)
+                        except (ValueError, TypeError):
+                            pass
+                
+                # Extract tags
+                tags = []
+                tag_elems = soup.select(".tag")
+                for tag_elem in tag_elems:
+                    tag = tag_elem.text.strip()
+                    if tag:
+                        tags.append(tag)
+                
+                return {
+                    "id": video_id,
+                    "source": "coverr",
+                    "title": title,
+                    "url": download_url,
+                    "thumbnail": thumbnail,
+                    "duration": duration,
+                    "width": width,
+                    "height": height,
+                    "format": "mp4",
+                    "user": "Coverr",
+                    "license": "Coverr License",
+                    "original_url": video_url,
+                    "description": "",
+                    "tags": tags
+                }
             
-            # If no direct download button, try to extract from video source
-            if not download_url:
-                video_element = soup.select_one("video source")
-                if video_element:
-                    download_url = video_element.get("src", "")
+            # Extract data from JSON-LD
+            content_url = json_ld.get("contentUrl", "")
+            if not content_url:
+                return {}
             
-            # Extract video dimensions from video element
+            # Extract dimensions
             width = 0
             height = 0
-            video_element = soup.select_one("video")
-            if video_element:
-                width_str = video_element.get("width", "0")
-                height_str = video_element.get("height", "0")
+            
+            # Try to extract from JSON-LD
+            width_str = json_ld.get("width", "")
+            height_str = json_ld.get("height", "")
+            
+            if width_str and height_str:
                 try:
+                    # Remove "px" if present
+                    width_str = width_str.replace("px", "")
+                    height_str = height_str.replace("px", "")
                     width = int(width_str)
                     height = int(height_str)
                 except (ValueError, TypeError):
                     pass
             
-            # If dimensions not found in video element, try to extract from page metadata
+            # If dimensions not found in JSON-LD, try to extract from video element
             if width == 0 or height == 0:
-                # Look for dimensions in page text
-                dimensions_pattern = r"(\d+)\s*[xX]\s*(\d+)"
-                dimensions_text = soup.select_one(".video-dimensions")
-                if dimensions_text:
-                    match = re.search(dimensions_pattern, dimensions_text.text)
-                    if match:
-                        width = int(match.group(1))
-                        height = int(match.group(2))
+                video_elem = soup.select_one("video")
+                if video_elem:
+                    width_str = video_elem.get("width", "0")
+                    height_str = video_elem.get("height", "0")
+                    try:
+                        width = int(width_str)
+                        height = int(height_str)
+                    except (ValueError, TypeError):
+                        pass
             
             # Extract duration
             duration = 0
-            duration_text = soup.select_one(".video-duration")
-            if duration_text:
-                duration_str = duration_text.text.strip()
-                # Parse duration in format MM:SS
-                try:
-                    minutes, seconds = duration_str.split(":")
+            duration_str = json_ld.get("duration", "")
+            if duration_str:
+                # Parse ISO 8601 duration
+                match = re.search(r'PT(\d+)M(\d+)S', duration_str)
+                if match:
+                    minutes, seconds = match.groups()
                     duration = int(minutes) * 60 + int(seconds)
-                except (ValueError, TypeError):
-                    pass
             
-            # Extract uploader/creator
-            user = "Coverr"
-            creator_element = soup.select_one(".video-author")
-            if creator_element:
-                user = creator_element.text.strip()
+            # If duration not found in JSON-LD, try to extract from page
+            if duration == 0:
+                duration_elem = soup.select_one(".video-duration")
+                if duration_elem:
+                    duration_text = duration_elem.text.strip()
+                    # Parse duration in format MM:SS
+                    if ":" in duration_text:
+                        try:
+                            minutes, seconds = duration_text.split(":")
+                            duration = int(minutes) * 60 + int(seconds)
+                        except (ValueError, TypeError):
+                            pass
+            
+            # Extract tags
+            tags = []
+            keywords = json_ld.get("keywords", "")
+            if keywords:
+                if isinstance(keywords, str):
+                    tags = [tag.strip() for tag in keywords.split(",") if tag.strip()]
+                elif isinstance(keywords, list):
+                    tags = keywords
+            
+            # If tags not found in JSON-LD, try to extract from page
+            if not tags:
+                tag_elems = soup.select(".tag")
+                for tag_elem in tag_elems:
+                    tag = tag_elem.text.strip()
+                    if tag:
+                        tags.append(tag)
             
             return {
-                "download_url": download_url,
+                "id": video_id,
+                "source": "coverr",
+                "title": json_ld.get("name", "Coverr Video"),
+                "url": content_url,
+                "thumbnail": json_ld.get("thumbnailUrl", ""),
+                "duration": duration,
                 "width": width,
                 "height": height,
-                "duration": duration,
-                "user": user,
-                "is_premium": is_premium
+                "format": "mp4",
+                "user": "Coverr",
+                "license": "Coverr License",
+                "original_url": video_url,
+                "description": json_ld.get("description", ""),
+                "tags": tags
             }
             
         except Exception as e:
@@ -298,46 +457,7 @@ class CoverrScraper(BaseScraper):
         Returns:
             Dictionary containing video metadata
         """
-        try:
-            self._rate_limit()
-            self._init_selenium()
-            
-            # Construct video URL
-            video_url = f"{self.base_url}/videos/{video_id}"
-            
-            # Get detailed metadata
-            metadata = self._get_video_details(video_url)
-            
-            # Skip if we couldn't get detailed metadata or if it's premium
-            if not metadata or metadata.get("is_premium", False):
-                self.logger.warning(f"Video {video_id} is premium or metadata not available")
-                return {}
-            
-            # Create standardized metadata
-            video_metadata = {
-                "id": video_id,
-                "source": "coverr",
-                "title": video_id.replace("-", " ").title(),  # Convert ID to title if no better title available
-                "url": metadata.get("download_url", ""),
-                "thumbnail": "",  # No thumbnail in this context
-                "duration": metadata.get("duration", 0),
-                "width": metadata.get("width", 0),
-                "height": metadata.get("height", 0),
-                "format": "mp4",  # Coverr videos are typically MP4
-                "user": metadata.get("user", "Coverr"),
-                "license": "Coverr License (Free for commercial use, no attribution required)",
-                "original_url": video_url,
-                "tags": []
-            }
-            
-            return video_metadata
-            
-        except Exception as e:
-            self.logger.error(f"Error getting Coverr metadata: {str(e)}")
-            return {}
-        finally:
-            # Close Selenium WebDriver to free resources
-            self._close_selenium()
+        return self._get_video_details(video_id)
     
     def download_video(self, video_url: str, output_path: str) -> bool:
         """
@@ -354,7 +474,7 @@ class CoverrScraper(BaseScraper):
             self._rate_limit()
             
             # For Coverr, we can directly download the video from the URL
-            response = requests.get(video_url, stream=True, timeout=30, headers=self.headers)
+            response = requests.get(video_url, stream=True, timeout=60, headers=self.headers)  # Longer timeout for potentially large videos
             response.raise_for_status()
             
             with open(output_path, 'wb') as f:

@@ -2,16 +2,17 @@
 
 ## Overview
 
-This documentation provides a comprehensive guide to the enhanced video pipeline system. The pipeline is designed to scrape videos from multiple sources, validate them against specific criteria, and upload validated videos to cloud storage.
+This documentation provides a comprehensive guide to the enhanced video pipeline system. The pipeline is designed to scrape videos from multiple sources, validate them against specific criteria, and upload validated videos to cloud storage. The system now features robust parallelization and enhanced batch processing controls for scaling to 1000+ hours of video content.
 
 ## Architecture
 
 The pipeline consists of several modular components:
 
 1. **Scrapers**: Modules for retrieving videos from various sources
-2. **Validators**: Modules for validating video content against specific criteria
-3. **Storage**: Module for uploading validated videos to cloud storage
-4. **Batch Processor**: Module for orchestrating the entire pipeline process
+2. **Parallel Scraper Manager**: Orchestrates concurrent execution of multiple scrapers
+3. **Validators**: Modules for validating video content against specific criteria
+4. **Storage**: Module for uploading validated videos to cloud storage
+5. **Enhanced Batch Processor**: Module for orchestrating the entire pipeline process with improved controls
 
 ## Scrapers
 
@@ -26,6 +27,16 @@ The following scrapers have been implemented:
 - **NOAA Scraper**: Retrieves videos from NOAA
 
 Each scraper adheres to its respective API documentation and rate limits.
+
+## Parallel Scraper Manager
+
+The new Parallel Scraper Manager provides:
+
+- **Concurrent Scraper Execution**: Run multiple scrapers simultaneously
+- **Resource-aware Scheduling**: Monitor CPU and memory usage to prevent overload
+- **Global Rate Limiting**: Prevent overwhelming external APIs
+- **Target-based Collection**: Collect videos until a target number of hours is reached
+- **Graceful Shutdown**: Properly handle interruptions and cleanup
 
 ## Validators
 
@@ -48,25 +59,48 @@ The cloud storage module supports:
 - Azure Blob Storage
 
 It handles:
+
 - Uploading validated videos
 - Tracking upload history
 - Retry logic for failed uploads
 - Deduplication
 
-## Batch Processor
+## Enhanced Batch Processor
 
-The batch processor orchestrates the entire pipeline:
+The enhanced batch processor provides:
 
-1. Searches for videos using specified scraper
-2. Downloads videos in batches
-3. Validates videos using the validation pipeline
-4. Uploads validated videos to cloud storage
-5. Manages disk space by cleaning up processed videos
-6. Tracks batch state for resuming interrupted processes
+- **Parallel Processing**: Process multiple videos concurrently
+- **Batch Size Control**: Configure the number of videos processed in each batch
+- **Target Hours**: Specify the total hours of video to collect
+- **Local Overhead Management**: Automatically clean up temporary files between batches
+- **Output Destination Control**: Choose between local storage or cloud upload
+- **Resource Monitoring**: Track disk space, memory, and CPU usage
+- **Resumable Processing**: Resume interrupted batch processing
 
-## Usage
+## Parallelization Architecture
 
-### Configuration
+The parallelization architecture consists of:
+
+1. **Parallel Scraper Manager**: Manages concurrent execution of multiple scrapers
+
+   - Configurable number of concurrent scrapers
+   - Resource monitoring to prevent overload
+   - Global rate limiting to respect API limits
+   - Results queue for collecting videos from all scrapers
+2. **Enhanced Batch Processor**: Manages parallel processing of videos
+
+   - Thread pool for concurrent downloads, validation, and uploads
+   - Batch-based processing to control memory usage
+   - Automatic cleanup between batches to manage disk space
+   - Resource monitoring to prevent overload
+3. **Resource Management**:
+
+   - CPU usage monitoring
+   - Memory usage monitoring
+   - Disk space monitoring
+   - Adaptive scheduling based on resource availability
+
+## Configuration
 
 Create a `config.json` file with the following structure:
 
@@ -121,10 +155,28 @@ Create a `config.json` file with the following structure:
     "download_dir": "downloads",
     "processed_dir": "processed",
     "failed_dir": "failed",
+    "temp_dir": "temp",
     "batch_size": 10,
     "max_workers": 4,
+    "max_scrapers": 3,
+    "target_hours": 1000,
     "disk_space_threshold": 1073741824,
+    "memory_threshold": 80,
+    "cpu_threshold": 80,
+    "output_destination": "local",
+    "cloud_bucket": "video-pipeline-bucket",
     "state_file": "logs/batch_state.json"
+  },
+  "parallel": {
+    "max_workers": 4,
+    "max_scrapers": 3,
+    "max_videos_per_scraper": 100,
+    "max_total_videos": 1000,
+    "target_hours": 1000,
+    "estimated_video_length": 20,
+    "global_rate_limit": 1.0,
+    "memory_threshold": 80,
+    "cpu_threshold": 80
   }
 }
 ```
@@ -134,17 +186,20 @@ Create a `config.json` file with the following structure:
 Set the following environment variables:
 
 ```
-PEXELS_API_KEY=your_pexels_api_key
+PEXELS_API_KEY=Lw7TVoTCXHDN9k1ovnM8c4lh5KRvpYfgm9qR9Om9CU4r86kYhQ6LlgxT
 VIDEVO_API_KEY=your_videvo_api_key
 NASA_API_KEY=your_nasa_api_key
 IA_ACCESS_KEY=your_internet_archive_access_key
 IA_SECRET_KEY=your_internet_archive_secret_key
 NOAA_API_TOKEN=your_noaa_api_token
+PIXABAY_API_KEY=your_pixabay_api_key
 AWS_ACCESS_KEY_ID=your_aws_access_key
 AWS_SECRET_ACCESS_KEY=your_aws_secret_key
 ```
 
-### Running the Pipeline
+## Usage
+
+### Basic Usage
 
 Run the pipeline using the following command:
 
@@ -152,14 +207,79 @@ Run the pipeline using the following command:
 python main.py --source pexels --query nature --max-videos 10
 ```
 
-Options:
-- `--config`: Path to configuration file (default: `config.json`)
-- `--log-dir`: Directory for log files (default: `logs`)
-- `--log-level`: Logging level (default: `INFO`)
-- `--source`: Video source to use (default: `pexels`)
-- `--query`: Search query (default: `nature`)
-- `--max-videos`: Maximum number of videos to process (default: `10`)
-- `--batch-id`: Resume processing for a specific batch ID
+### Enhanced Usage with Parallelization
+
+Run the pipeline with enhanced parallelization:
+
+```bash
+python main.py --enhanced --batch-size 20 --target-hours 10 --output-destination local
+```
+
+### Multi-Source Parallelization
+
+Run the pipeline with multiple sources in parallel:
+
+```bash
+python main.py --enhanced --sources "pexels:nature,videvo:ocean,nasa:space" --batch-size 20 --target-hours 10
+```
+
+### Full Options
+
+```
+--config CONFIG         Path to configuration file (default: config.json)
+--log-dir LOG_DIR       Directory for log files (default: logs)
+--log-level LOG_LEVEL   Logging level (default: INFO)
+--source SOURCE         Video source to use (default: pexels)
+--sources SOURCES       Multiple sources with queries (format: "source1:query1,source2:query2")
+--query QUERY           Search query (default: nature)
+--max-videos MAX_VIDEOS Maximum number of videos to process (default: 10)
+--batch-id BATCH_ID     Resume processing for a specific batch ID
+--enhanced              Use enhanced batch processor with parallelization
+--batch-size BATCH_SIZE Size of each processing batch
+--target-hours HOURS    Target hours of video to collect
+--output-destination DEST Output destination (local or cloud)
+--max-workers WORKERS   Maximum number of worker threads
+--max-scrapers SCRAPERS Maximum number of concurrent scrapers
+```
+
+## Scaling Considerations
+
+### Scaling to 1000+ Hours
+
+To scale the pipeline to process 1000+ hours of video:
+
+1. **Increase Parallelization**:
+
+   - Increase `max_workers` for more concurrent processing
+   - Increase `max_scrapers` for more concurrent sources
+   - Distribute across multiple machines if necessary
+2. **Optimize Batch Size**:
+
+   - Larger batch sizes increase throughput but require more memory
+   - Smaller batch sizes reduce memory usage but increase overhead
+   - Find the optimal balance for your hardware
+3. **Manage Resources**:
+
+   - Monitor disk space usage and adjust cleanup frequency
+   - Monitor memory usage and adjust batch size accordingly
+   - Monitor CPU usage and adjust worker count accordingly
+4. **Use Cloud Storage**:
+
+   - Set `output_destination` to "cloud" to avoid local storage limitations
+   - Configure cloud provider settings in the storage section
+5. **Resume Capability**:
+
+   - Use the `--batch-id` option to resume interrupted processing
+   - The state file tracks progress and can be used to resume
+
+### Resource Requirements
+
+Processing 1000 hours of video requires:
+
+- **Storage**: Approximately 1-2 TB of temporary storage
+- **Memory**: 8-16 GB RAM recommended
+- **CPU**: 4+ cores recommended
+- **Network**: High-speed internet connection for downloading and uploading
 
 ## Dependencies
 
@@ -172,6 +292,7 @@ Options:
 - Azure Blob Storage (for Azure)
 - NumPy
 - Requests
+- psutil (for resource monitoring)
 
 ## Testing
 
@@ -189,14 +310,54 @@ python -m unittest discover tests
 
 ## Implementation Notes
 
-1. The resolution requirement has been updated to ensure videos are at least 512×512 resolution, rather than resizing them to exactly 512×512.
+1. **Scraper Fixes**: All scrapers have been updated to handle API changes and improve reliability.
+2. **Parallelization**: The new parallel architecture allows for concurrent execution of multiple scrapers and processing steps.
+3. **Batch Controls**: Enhanced batch processing controls allow for precise management of local overhead and resource usage.
+4. **Resource Monitoring**: The system now monitors CPU, memory, and disk usage to prevent overload.
+5. **Target-based Collection**: The system can now collect videos until a target number of hours is reached.
+6. **Output Destination Control**: Choose between local storage or cloud upload for processed videos.
+7. **Resumable Processing**: The system can resume interrupted batch processing.
 
-2. All scrapers adhere to their respective API documentation and rate limits.
+## Troubleshooting
 
-3. The batch processor manages disk space by cleaning up processed videos.
+### Common Issues
 
-4. The validation pipeline is modular and can be extended with additional validators.
+1. **API Rate Limiting**:
 
-5. The cloud storage module supports multiple cloud providers and includes retry logic for reliability.
+   - Reduce `max_scrapers` or increase `global_rate_limit`
+   - Check API key validity and rate limits
+2. **Memory Usage**:
 
-6. The system is designed to be robust against failures and can resume interrupted processes.
+   - Reduce `batch_size` to process fewer videos at once
+   - Reduce `max_workers` to use fewer threads
+3. **Disk Space**:
+
+   - Increase `disk_space_threshold` to clean up more aggressively
+   - Use cloud storage with `output_destination: "cloud"`
+4. **Failed Downloads**:
+
+   - Check network connectivity
+   - Verify API keys are valid
+   - Check scraper logs for specific errors
+5. **Failed Validation**:
+
+   - Check validation logs for specific failures
+   - Adjust validation parameters if necessary
+
+### Logs
+
+Log files are stored in the `logs` directory:
+
+- `pipeline.log`: Main pipeline log
+- `validation.log`: Validation results
+- `upload_history.json`: Record of uploaded videos
+- `batch_state.json`: State of batch processing
+
+## Future Improvements
+
+1. **Distributed Processing**: Extend to support distributed processing across multiple machines
+2. **Adaptive Rate Limiting**: Dynamically adjust rate limits based on API responses
+3. **Content-based Filtering**: Improve filtering based on video content analysis
+4. **Checkpoint Optimization**: Optimize checkpoint frequency for large-scale processing
+5. **API Fallbacks**: Implement fallback mechanisms for API failures
+6. **Enhanced Monitoring**: Add real-time monitoring and alerting capabilities

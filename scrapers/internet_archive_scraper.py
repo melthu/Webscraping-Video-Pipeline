@@ -1,5 +1,5 @@
 """
-Internet Archive API scraper implementation for video collection pipeline.
+Fix for Internet Archive scraper implementation.
 """
 
 import os
@@ -8,7 +8,7 @@ import time
 import json
 from typing import List, Dict, Any, Optional
 import requests
-from internetarchive import search_items, get_item
+from internetarchive import search_items, get_item, configure
 from scrapers.base_scraper import BaseScraper
 
 logger = logging.getLogger(__name__)
@@ -41,17 +41,7 @@ class InternetArchiveScraper(BaseScraper):
         self.request_delay = config.get("request_delay", 1.0)  # seconds between requests
         self.last_request_time = 0
         
-        # Configure internetarchive library if credentials are provided
-        if self.access_key and self.secret_key:
-            try:
-                import internetarchive
-                internetarchive.configure(
-                    username=self.access_key,
-                    password=self.secret_key
-                )
-                self.logger.info("Configured Internet Archive with credentials")
-            except Exception as e:
-                self.logger.warning(f"Failed to configure Internet Archive with credentials: {str(e)}")
+        # No need to configure internetarchive library here
     
     def _rate_limit(self):
         """Apply rate limiting to avoid overloading the API."""
@@ -78,41 +68,43 @@ class InternetArchiveScraper(BaseScraper):
         """
         try:
             self._rate_limit()
-            
-            # Calculate offset for pagination
-            offset = (page - 1) * self.per_page
-            
-            # Construct search query to find videos
-            search_query = f"{query} AND mediatype:movies"
-            
-            # Use the internetarchive library to search
-            search_results = search_items(search_query, fields=[
-                'identifier', 'title', 'description', 'creator', 'date', 
-                'subject', 'mediatype', 'collection', 'downloads', 'format'
-            ], sorts=['downloads desc'], params={
+
+            # Construct search parameters for the advancedsearch.php endpoint
+            params = {
+                'q': f'{query} AND mediatype:movies',
+                'fl[]': 'identifier,title,description,creator,date,subject,mediatype,collection,downloads,format',
+                'sort[]': 'downloads desc',
                 'rows': self.per_page,
-                'page': page
-            })
-            
+                'page': page,
+                'output': 'json'
+            }
+            headers = {
+                "User-Agent": self.headers["User-Agent"],
+                "Authorization": f"LOW {self.access_key}:{self.secret_key}"
+            }
+            response = requests.get("https://archive.org/advancedsearch.php", params=params, headers=headers)
+            response.raise_for_status()
+            docs = response.json().get('response', {}).get('docs', [])
+
             results = []
-            for item in search_results:
+            for item in docs:
                 # Skip if not a video
                 if item.get('mediatype') != 'movies':
                     continue
-                
+
                 identifier = item.get('identifier')
                 if not identifier:
                     continue
-                
+
                 # Get more detailed information about the item
                 item_metadata = self._get_item_metadata(identifier)
                 if not item_metadata:
                     continue
-                
+
                 # Skip if no video files found
                 if not item_metadata.get('video_files'):
                     continue
-                
+
                 # Create standardized metadata
                 metadata = {
                     "id": identifier,
@@ -134,13 +126,13 @@ class InternetArchiveScraper(BaseScraper):
                     "downloads": item.get('downloads', 0),
                     "video_files": item_metadata.get('video_files', [])
                 }
-                
+
                 # Only add if we have a valid video URL
                 if metadata.get('url'):
                     results.append(metadata)
-            
+
             return results
-            
+
         except Exception as e:
             self.logger.error(f"Error searching Internet Archive: {str(e)}")
             return []
@@ -172,41 +164,51 @@ class InternetArchiveScraper(BaseScraper):
             best_resolution = 0
             thumbnail = ""
             
-            # Check if files is a dictionary or list and handle accordingly
-            if isinstance(item.files, dict):
-                files_to_process = item.files.items()
-            else:
-                # If it's a list or other type, create an empty iterator
-                self.logger.warning(f"Item {identifier} has unexpected files type: {type(item.files)}")
-                files_to_process = []
-            
-            for file_name, file_info in files_to_process:
-                # Check if it's a video file
-                if file_info.get('format') in ['h.264', 'MPEG4', 'mp4', 'Matroska', 'QuickTime', 'Ogg Video']:
-                    file_url = f"https://archive.org/download/{identifier}/{file_name}"
-                    
-                    # Get resolution if available
-                    width = int(file_info.get('width', 0))
-                    height = int(file_info.get('height', 0))
-                    resolution = width * height
-                    
-                    # Check if this is the best quality video so far
-                    if resolution > best_resolution and resolution >= 512*512:  # Ensure minimum resolution
-                        best_resolution = resolution
-                        best_video_url = file_url
-                    
-                    video_files.append({
-                        'name': file_name,
-                        'url': file_url,
-                        'format': file_info.get('format', ''),
-                        'width': width,
-                        'height': height,
-                        'size': file_info.get('size', 0)
-                    })
+            # Process files safely
+            if hasattr(item, 'files'):
+                # Check if files is a dictionary or list and handle accordingly
+                if isinstance(item.files, dict):
+                    files_to_process = item.files.items()
+                elif isinstance(item.files, list):
+                    # If it's a list, create an iterator with name and file info
+                    files_to_process = [(file.get('name', ''), file) for file in item.files]
+                else:
+                    # If it's another type, create an empty iterator
+                    self.logger.warning(f"Item {identifier} has unexpected files type: {type(item.files)}")
+                    files_to_process = []
                 
-                # Look for thumbnail
-                if not thumbnail and file_name.endswith(('jpg', 'jpeg', 'png')) and 'thumb' in file_name.lower():
-                    thumbnail = f"https://archive.org/download/{identifier}/{file_name}"
+                for file_name, file_info in files_to_process:
+                    # Ensure file_info is a dictionary
+                    if not isinstance(file_info, dict):
+                        continue
+                    
+                    # Check if it's a video file
+                    file_format = file_info.get('format', '')
+                    if isinstance(file_format, str) and file_format.lower() in ['h.264', 'mpeg4', 'mp4', 'matroska', 'quicktime', 'ogg video']:
+                        file_url = f"https://archive.org/download/{identifier}/{file_name}"
+                        
+                        # Get resolution if available
+                        width = int(file_info.get('width', 0) or 0)
+                        height = int(file_info.get('height', 0) or 0)
+                        resolution = width * height
+                        
+                        # Check if this is the best quality video so far
+                        if resolution > best_resolution and resolution >= 512*512:  # Ensure minimum resolution
+                            best_resolution = resolution
+                            best_video_url = file_url
+                        
+                        video_files.append({
+                            'name': file_name,
+                            'url': file_url,
+                            'format': file_format,
+                            'width': width,
+                            'height': height,
+                            'size': int(file_info.get('size', 0) or 0)
+                        })
+                    
+                    # Look for thumbnail
+                    if not thumbnail and isinstance(file_name, str) and file_name.lower().endswith(('jpg', 'jpeg', 'png')) and 'thumb' in file_name.lower():
+                        thumbnail = f"https://archive.org/download/{identifier}/{file_name}"
             
             # If no thumbnail found, use a default one
             if not thumbnail:
@@ -220,19 +222,20 @@ class InternetArchiveScraper(BaseScraper):
                     if isinstance(runtime, list):
                         runtime = runtime[0]
                     # Convert various runtime formats to seconds
-                    if 'min' in runtime:
-                        minutes = float(runtime.replace('min', '').strip())
-                        duration = int(minutes * 60)
-                    elif ':' in runtime:
-                        parts = runtime.split(':')
-                        if len(parts) == 2:
-                            minutes, seconds = parts
-                            duration = int(minutes) * 60 + int(seconds)
-                        elif len(parts) == 3:
-                            hours, minutes, seconds = parts
-                            duration = int(hours) * 3600 + int(minutes) * 60 + int(seconds)
-                except Exception:
-                    pass
+                    if isinstance(runtime, str):
+                        if 'min' in runtime:
+                            minutes = float(runtime.replace('min', '').strip())
+                            duration = int(minutes * 60)
+                        elif ':' in runtime:
+                            parts = runtime.split(':')
+                            if len(parts) == 2:
+                                minutes, seconds = parts
+                                duration = int(minutes) * 60 + int(seconds)
+                            elif len(parts) == 3:
+                                hours, minutes, seconds = parts
+                                duration = int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+                except Exception as e:
+                    self.logger.warning(f"Error parsing runtime for {identifier}: {str(e)}")
             
             # Extract license information
             license_info = metadata.get('licenseurl', metadata.get('license', 'Unknown'))

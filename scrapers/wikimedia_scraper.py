@@ -67,11 +67,8 @@ class WikimediaScraper(BaseScraper):
         try:
             self._rate_limit()
             
-            # Calculate continue parameter for pagination
-            continue_param = ""
-            if page > 1:
-                # This is a simplification; in practice, you'd need to store and use the actual continue token
-                continue_param = str((page - 1) * self.per_page)
+            # Calculate offset for pagination
+            offset = (page - 1) * self.per_page
             
             # Prepare API parameters for search
             params = {
@@ -81,7 +78,7 @@ class WikimediaScraper(BaseScraper):
                 "srsearch": f"{query} filetype:video",
                 "srnamespace": "6",  # File namespace
                 "srlimit": self.per_page,
-                "sroffset": (page - 1) * self.per_page
+                "sroffset": offset
             }
             
             response = self._make_request(self.search_url, headers=self.headers, params=params)
@@ -203,7 +200,7 @@ class WikimediaScraper(BaseScraper):
             # Extract duration
             duration = 0
             for meta in metadata:
-                if meta.get("name") == "length":
+                if isinstance(meta, dict) and meta.get("name") == "length":
                     try:
                         duration = float(meta.get("value", 0))
                     except (ValueError, TypeError):
@@ -221,7 +218,8 @@ class WikimediaScraper(BaseScraper):
             if "Categories" in ext_metadata:
                 categories_data = ext_metadata["Categories"]
                 categories_str = categories_data.get("value", "")
-                categories = [cat.strip() for cat in categories_str.split("|") if cat.strip()]
+                if isinstance(categories_str, str):
+                    categories = [cat.strip() for cat in categories_str.split("|") if cat.strip()]
             
             # Get direct video URL
             video_url = image_info.get("url", "")
