@@ -262,5 +262,11 @@ def main():
         return 1
 
 if __name__ == "__main__":
-    sys.exit(main())
+    start_time = time.time()
+    exit_code = main()
+    elapsed = time.time() - start_time
+    # Ensure logging is configured before logging here
+    logger = logging.getLogger("main")
+    logger.info(f"Total pipeline execution time: {elapsed:.2f} seconds")
+    sys.exit(exit_code)
 CloudStorageUploader

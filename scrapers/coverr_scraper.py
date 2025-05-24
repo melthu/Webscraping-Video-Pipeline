@@ -87,99 +87,56 @@ class CoverrScraper(BaseScraper):
             return []
     
     def _search_api(self, query: str, page: int = 1) -> List[Dict[str, Any]]:
-        """
-        Search for videos using Coverr API.
-        
-        Args:
-            query: Search term
-            page: Page number for pagination
-            
-        Returns:
-            List of video metadata dictionaries
-        """
         try:
-            # Prepare API parameters
             params = {
-                "q": query,
+                "query": query,
                 "page": page,
-                "per_page": self.per_page
+                "page_size": self.per_page,
+                "sort": "popular",
+                "urls": "true"
             }
-            
-            # Make API request
+
             response = self._make_request(self.api_url, headers=self.headers, params=params)
             if not response:
                 return []
-            
-            try:
-                data = response.json()
-            except json.JSONDecodeError:
-                self.logger.warning("Failed to parse API response as JSON")
-                return []
-            
-            # Extract videos from response
-            videos = data.get("videos", [])
-            if not videos:
-                return []
-            
-            # Transform the API response to our standard format
+
+            data = response.json()
+            videos = data.get("hits", [])
             results = []
+
             for video in videos:
-                video_id = video.get("id", "")
-                if not video_id:
+                video_id = video.get("id")
+                video_url = video.get("urls", {}).get("mp4_download")
+                if not video_id or not video_url:
                     continue
-                
-                # Get video URL
-                video_files = video.get("video_files", [])
-                if not video_files:
-                    continue
-                
-                # Find the best quality video
-                best_video = None
-                best_width = 0
-                for video_file in video_files:
-                    width = video_file.get("width", 0)
-                    if width >= 512 and width > best_width:
-                        best_video = video_file
-                        best_width = width
-                
-                if not best_video:
-                    continue
-                
-                # Get video URL
-                video_url = best_video.get("link", "")
-                if not video_url:
-                    continue
-                
-                # Get thumbnail
-                thumbnail = ""
-                video_pictures = video.get("video_pictures", [])
-                if video_pictures:
-                    thumbnail = video_pictures[0].get("picture", "")
-                
-                # Create standardized metadata
+
+                try:
+                    duration = float(video.get("duration", 0))
+                except (ValueError, TypeError):
+                    duration = 0
+
                 metadata = {
                     "id": video_id,
                     "source": "coverr",
-                    "title": video.get("name", "Coverr Video"),
+                    "title": video.get("title", "Coverr Video"),
                     "url": video_url,
-                    "thumbnail": thumbnail,
-                    "duration": video.get("duration", 0),
-                    "width": best_video.get("width", 0),
-                    "height": best_video.get("height", 0),
+                    "thumbnail": video.get("thumbnail", ""),
+                    "duration": duration,
+                    "width": int(video.get("max_width", 0)),
+                    "height": int(video.get("max_height", 0)),
                     "format": "mp4",
                     "user": "Coverr",
-                    "license": "Coverr License",  # Coverr has its own license
+                    "license": "Coverr License",
                     "original_url": f"https://coverr.co/videos/{video_id}",
                     "description": video.get("description", ""),
                     "tags": video.get("tags", [])
                 }
-                
                 results.append(metadata)
-            
+
             return results
-            
+
         except Exception as e:
-            self.logger.error(f"Error in API search: {str(e)}")
+            self.logger.error(f"Error in Coverr API search: {str(e)}")
             return []
     
     def _search_web(self, query: str, page: int = 1) -> List[Dict[str, Any]]:

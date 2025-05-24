@@ -142,6 +142,10 @@ class EnhancedBatchProcessor:
             True if enough space is available, False otherwise
         """
         try:
+            # Ensure the download directory exists before querying disk usage
+            if not os.path.exists(self.download_dir):
+                self.logger.warning(f"Download directory {self.download_dir} does not exist. Creating it now.")
+                os.makedirs(self.download_dir, exist_ok=True)
             # Get free space in download directory
             free_space = shutil.disk_usage(self.download_dir).free
             
@@ -186,14 +190,24 @@ class EnhancedBatchProcessor:
                         self.logger.debug(f"Removed temporary file: {file_path}")
                     except Exception as e:
                         self.logger.warning(f"Error removing file {file}: {str(e)}")
+                        
+            # Clean up failed directory
+            for root, dirs, files in os.walk(self.failed_dir):
+                for file in files:
+                    try:
+                        file_path = os.path.join(root, file)
+                        os.remove(file_path)
+                        self.logger.debug(f"Removed temporary file: {file_path}")
+                    except Exception as e:
+                        self.logger.warning(f"Error removing file {file}: {str(e)}")
             
-            # Remove empty directories
+            # Remove empty directories but skip top-level download/temp directories
             for directory in [self.download_dir, self.temp_dir]:
                 for root, dirs, files in os.walk(directory, topdown=False):
                     for dir_name in dirs:
                         try:
                             dir_path = os.path.join(root, dir_name)
-                            if not os.listdir(dir_path):
+                            if not os.listdir(dir_path) and dir_path != self.download_dir and dir_path != self.temp_dir:
                                 os.rmdir(dir_path)
                                 self.logger.debug(f"Removed empty directory: {dir_path}")
                         except Exception as e:
@@ -334,15 +348,26 @@ class EnhancedBatchProcessor:
             validated_count = 0
             uploaded_count = 0
             failed_count = 0
-            total_seconds = 0
             total_videos_found = 0
             # Loop until enough validated video duration has been collected
-            while total_seconds < self.target_hours * 3600 and not self.shutdown_flag.is_set():
+            expected_seconds = self.target_hours * 3600
+            while self.total_video_seconds < expected_seconds and not self.shutdown_flag.is_set():
                 self.logger.info("Running additional scraping round...")
                 videos = self.parallel_scraper_manager.run_scrapers_until_target(valid_sources, self.target_hours)
-                # Filter only .mp4 videos
-                videos = [v for v in videos if v.get("url", "").lower().endswith(".mp4")]
-                self.logger.info(f"Filtered to {len(videos)} .mp4 videos")
+                # Filter: allow all Coverr & Wikimedia videos; others must have URLs ending in .mp4
+                filtered_videos = []
+                for v in videos:
+                    src = v.get("source", "").lower()
+                    url = v.get("url", "").lower()
+                    if src in ("coverr", "wikimedia"):
+                        # accept all videos from Coverr and Wikimedia
+                        filtered_videos.append(v)
+                    else:
+                        # for other sources, URL must end with .mp4
+                        if url.endswith(".mp4"):
+                            filtered_videos.append(v)
+                videos = filtered_videos
+                self.logger.info(f"Filtered to {len(videos)} videos (Coverr & Wikimedia + others ending in .mp4)")
                 total_videos_found += len(videos)
                 if len(videos) == 0:
                     self.logger.warning("No more videos available from scrapers.")
@@ -371,32 +396,31 @@ class EnhancedBatchProcessor:
                     validated_count += batch_results["validated"]
                     uploaded_count += batch_results["uploaded"]
                     failed_count += batch_results["failed"]
-                    total_seconds += batch_results["seconds"]
                     # Update batch state
                     batch_state["videos_downloaded"] = processed_count
                     batch_state["videos_validated"] = validated_count
                     batch_state["videos_uploaded"] = uploaded_count
                     batch_state["videos_failed"] = failed_count
-                    batch_state["video_seconds"] = total_seconds
+                    batch_state["video_seconds"] = self.total_video_seconds
                     self._save_state()
                     # Clean up after batch
                     self._cleanup_temp_files()
                 # End of batch round
             batch_state["videos_found"] = total_videos_found
-            # Check if total_seconds is within 5% of target_hours * 3600
+            # Check if total_video_seconds is within 5% of target_hours * 3600
             expected_seconds = self.target_hours * 3600
             lower_bound = expected_seconds * 0.95
             upper_bound = expected_seconds * 1.05
-            if not (lower_bound <= total_seconds <= upper_bound):
+            if not (lower_bound <= self.total_video_seconds <= upper_bound):
                 self.logger.warning(
-                    f"Total video duration ({total_seconds/3600:.2f} hours) is not within 5% of target ({self.target_hours} hours)"
+                    f"Total video duration ({self.total_video_seconds/3600:.2f} hours) is not within 5% of target ({self.target_hours} hours)"
                 )
             # Update final batch state
             batch_state["end_time"] = time.time()
             batch_state["status"] = "completed"
-            batch_state["video_seconds"] = total_seconds
+            batch_state["video_seconds"] = self.total_video_seconds
             self._save_state()
-            self.logger.info(f"Batch processing completed: {validated_count} videos validated, {total_seconds/3600:.2f} hours")
+            self.logger.info(f"Batch processing completed: {validated_count} videos validated, {self.total_video_seconds/3600:.2f} hours")
             # Final cleanup
             self._cleanup_temp_files()
             return {
@@ -407,8 +431,8 @@ class EnhancedBatchProcessor:
                 "videos_validated": batch_state["videos_validated"],
                 "videos_uploaded": batch_state["videos_uploaded"],
                 "videos_failed": batch_state["videos_failed"],
-                "video_seconds": batch_state["video_seconds"],
-                "video_hours": batch_state["video_seconds"] / 3600,
+                "video_seconds": self.total_video_seconds,
+                "video_hours": self.total_video_seconds / 3600,
                 "duration": batch_state["end_time"] - batch_state["start_time"]
             }
             
@@ -471,6 +495,7 @@ class EnhancedBatchProcessor:
                 if validation_result["success"]:
                     results["validated"] += 1
                     results["seconds"] += video.get("duration", 0)
+                    self.total_video_seconds += video.get("duration", 0)
                     
                     if self.output_destination == "cloud":
                         # Upload synchronously to avoid pickle issues with ProcessPoolExecutor
@@ -625,15 +650,8 @@ class EnhancedBatchProcessor:
             # Upload the video
             self.logger.info(f"Uploading video: {os.path.basename(video_path)}")
             
-            # Get source and video ID for object key
-            source = video_metadata.get("source", "unknown")
-            video_id = video_metadata.get("id", "unknown")
-            
-            # Create object key
-            object_key = f"videos/{source}/{video_id}/{os.path.basename(video_path)}"
-            
-            # Upload to cloud storage
-            upload_success, upload_url = self.cloud_uploader.upload_file(video_path, object_key, video_metadata)
+            # Upload to cloud storage using new API
+            upload_success, upload_url = self.cloud_uploader.upload_video(video_path, video_metadata)
             
             if not upload_success:
                 result["error"] = "Failed to upload video"

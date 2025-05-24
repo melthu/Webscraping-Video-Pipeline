@@ -116,33 +116,29 @@ class CloudStorageUploader:
                 # Check for duplicate
                 if os.path.exists(destination):
                     self.logger.info(f"File {video_path} already exists at {destination}")
-                    return {
-                        "success": True,
-                        "message": "Already uploaded locally",
-                        "path": destination
-                    }
+                    # Format return as (success: bool, url_or_none: Optional[str])
+                    return True, None
 
                 # Copy video locally
                 import shutil
                 shutil.copy2(video_path, destination)
 
                 self.logger.info(f"Successfully copied {video_path} to local storage at {destination}")
-                return {
-                    "success": True,
-                    "path": destination,
-                    "provider": "local",
-                    "cloud_key": cloud_key
-                }
+                # Format return as (success: bool, url_or_none: Optional[str])
+                return True, None
 
             except Exception as e:
                 self.logger.error(f"Error copying video to local storage: {str(e)}")
-                return {"success": False, "error": str(e)}
+                # Format return as (success: bool, url_or_none: Optional[str])
+                return False, str(e)
 
         if not self.client:
-            return {"success": False, "error": f"Cloud client not initialized for {self.provider}"}
+            # Format return as (success: bool, url_or_none: Optional[str])
+            return False, f"Cloud client not initialized for {self.provider}"
         
         if not os.path.exists(video_path):
-            return {"success": False, "error": f"Video file not found: {video_path}"}
+            # Format return as (success: bool, url_or_none: Optional[str])
+            return False, f"Video file not found: {video_path}"
         
         try:
             # Generate cloud storage key/path
@@ -156,14 +152,8 @@ class CloudStorageUploader:
             # Check if already uploaded
             if self._is_already_uploaded(video_path, cloud_key):
                 self.logger.info(f"File {video_path} already uploaded as {cloud_key}")
-                return {
-                    "success": True,
-                    "message": "Already uploaded",
-                    "cloud_key": cloud_key,
-                    "provider": self.provider,
-                    "bucket": self.bucket_name,
-                    "url": self._get_public_url(cloud_key)
-                }
+                # Format return as (success: bool, url_or_none: Optional[str])
+                return True, self._get_public_url(cloud_key)
             
             # Upload with retries
             for attempt in range(self.max_retries):
@@ -214,7 +204,8 @@ class CloudStorageUploader:
                         time.sleep(self.retry_delay * (2 ** attempt))  # Exponential backoff
                     else:
                         # Make sure we return a properly formatted error response
-                        return {"success": False, "error": str(e), "provider": self.provider, "bucket": self.bucket_name}
+                        # Format return as (success: bool, url_or_none: Optional[str])
+                        return False, str(e)
             
             # Record successful upload
             self._record_upload(video_path, cloud_key, metadata)
@@ -239,17 +230,13 @@ class CloudStorageUploader:
 
             self.logger.info(f"Successfully uploaded {video_path} to {self.provider}:{self.bucket_name}/{cloud_key}")
 
-            return {
-                "success": True,
-                "cloud_key": cloud_key,
-                "provider": self.provider,
-                "bucket": self.bucket_name,
-                "url": self._get_public_url(cloud_key)
-            }
+            # Format return as (success: bool, url_or_none: Optional[str])
+            return True, self._get_public_url(cloud_key)
             
         except Exception as e:
             self.logger.error(f"Error uploading {video_path}: {str(e)}")
-            return {"success": False, "error": str(e)}
+            # Format return as (success: bool, url_or_none: Optional[str])
+            return False, str(e)
     
     def _is_already_uploaded(self, video_path: str, cloud_key: str) -> bool:
         """

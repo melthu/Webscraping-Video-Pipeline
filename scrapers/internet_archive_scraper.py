@@ -71,7 +71,7 @@ class InternetArchiveScraper(BaseScraper):
 
             # Construct search parameters for the advancedsearch.php endpoint
             params = {
-                'q': f'{query} AND mediatype:movies',
+                'q': f'{query} AND mediatype:movies AND format:MP4',
                 'fl[]': 'identifier,title,description,creator,date,subject,mediatype,collection,downloads,format',
                 'sort[]': 'downloads desc',
                 'rows': self.per_page,
@@ -182,29 +182,29 @@ class InternetArchiveScraper(BaseScraper):
                     if not isinstance(file_info, dict):
                         continue
                     
-                    # Check if it's a video file
-                    file_format = file_info.get('format', '')
-                    if isinstance(file_format, str) and file_format.lower() in ['h.264', 'mpeg4', 'mp4', 'matroska', 'quicktime', 'ogg video']:
-                        file_url = f"https://archive.org/download/{identifier}/{file_name}"
-                        
-                        # Get resolution if available
-                        width = int(file_info.get('width', 0) or 0)
-                        height = int(file_info.get('height', 0) or 0)
-                        resolution = width * height
-                        
-                        # Check if this is the best quality video so far
-                        if resolution > best_resolution and resolution >= 512*512:  # Ensure minimum resolution
-                            best_resolution = resolution
-                            best_video_url = file_url
-                        
-                        video_files.append({
-                            'name': file_name,
-                            'url': file_url,
-                            'format': file_format,
-                            'width': width,
-                            'height': height,
-                            'size': int(file_info.get('size', 0) or 0)
-                        })
+                    # Only process MP4 containers by file extension
+                    if not (isinstance(file_name, str) and file_name.lower().endswith('.mp4')):
+                        continue
+                    file_url = f"https://archive.org/download/{identifier}/{file_name}"
+                    
+                    # Parse resolution
+                    width = int(file_info.get('width', 0) or 0)
+                    height = int(file_info.get('height', 0) or 0)
+                    resolution = width * height
+                    
+                    # Track highest-resolution MP4
+                    if resolution > best_resolution and resolution >= 512*512:
+                        best_resolution = resolution
+                        best_video_url = file_url
+                    
+                    video_files.append({
+                        'name': file_name,
+                        'url': file_url,
+                        'format': 'mp4',
+                        'width': width,
+                        'height': height,
+                        'size': int(file_info.get('size', 0) or 0)
+                    })
                     
                     # Look for thumbnail
                     if not thumbnail and isinstance(file_name, str) and file_name.lower().endswith(('jpg', 'jpeg', 'png')) and 'thumb' in file_name.lower():

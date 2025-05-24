@@ -36,6 +36,9 @@ class WikimediaScraper(BaseScraper):
         self.headers = {
             "User-Agent": "AfterQuery Video Collection Pipeline/1.0 (contact@example.com)"
         }
+        # Use a persistent session with compliant User-Agent for downloads
+        self.session = requests.Session()
+        self.session.headers.update(self.headers)
         
         # Rate limiting settings
         self.request_delay = config.get("request_delay", 1.0)  # seconds between requests
@@ -310,7 +313,7 @@ class WikimediaScraper(BaseScraper):
             self._rate_limit()
             
             # For Wikimedia Commons, we can directly download the video from the URL
-            response = requests.get(video_url, stream=True, timeout=60)  # Longer timeout for potentially large videos
+            response = self.session.get(video_url, stream=True, timeout=60)  # Use session with compliant User-Agent
             response.raise_for_status()
             
             with open(output_path, 'wb') as f:
