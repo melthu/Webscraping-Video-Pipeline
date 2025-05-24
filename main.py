@@ -1,7 +1,3 @@
-"""
-Updated main script for video pipeline with enhanced parallelization and batch controls.
-"""
-
 import os
 from dotenv import load_dotenv
 load_dotenv()
