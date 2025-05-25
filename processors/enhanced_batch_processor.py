@@ -421,8 +421,6 @@ class EnhancedBatchProcessor:
                     batch_state["videos_failed"] = failed_count
                     batch_state["video_seconds"] = self.total_video_seconds
                     self._save_state()
-                    # Clean up after batch
-                    self._cleanup_temp_files()
                 # End of batch round
             batch_state["videos_found"] = total_videos_found
             # Update final batch state
