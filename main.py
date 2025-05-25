@@ -190,14 +190,16 @@ def main():
             result = batch_processor.resume_batch(args.batch_id)
             if result.get("success", False):
                 logger.info("Batch processing completed successfully")
-                logger.info(f"Processed {result.get('videos_downloaded', 0)} videos")
-                logger.info(f"Validated {result.get('videos_validated', 0)} videos")
-                logger.info(f"Uploaded {result.get('videos_uploaded', 0)} videos")
-                logger.info(f"Total video duration: {result.get('video_hours', 0):.2f} hours")
+                # No per-source logging in resume mode, assume totals are handled within resume_batch or log totals after this block
             else:
                 logger.error(f"Batch processing failed: {result.get('error', 'Unknown error')}")
                 return 1
         else:
+            total_processed = 0
+            total_validated = 0
+            total_uploaded = 0
+            total_duration = 0.0
+
             if len(sources) > 1:
                 # Multiple sources: process in parallel using ThreadPoolExecutor
                 results = []
@@ -219,22 +221,25 @@ def main():
                             results.append((source, result))
                         except Exception as exc:
                             logger.error(f"Batch processing failed for source {source}: {exc}")
-                            return 1
+                            # Continue processing other sources even if one fails
+                            results.append((source, {"success": False, "error": str(exc)}))
                 
-                # Check results
+                # Aggregate results from all sources
                 all_success = True
                 for source, result in results:
                     if result.get("success", False):
                         logger.info(f"Batch processing completed successfully for source: {source}")
-                        logger.info(f"Processed {result.get('videos_downloaded', 0)} videos")
-                        logger.info(f"Validated {result.get('videos_validated', 0)} videos")
-                        logger.info(f"Uploaded {result.get('videos_uploaded', 0)} videos")
-                        logger.info(f"Total video duration: {result.get('video_hours', 0):.2f} hours")
+                        total_processed += result.get("videos_downloaded", 0)
+                        total_validated += result.get("videos_validated", 0)
+                        total_uploaded += result.get("videos_uploaded", 0)
+                        total_duration += result.get("video_hours", 0)
                     else:
                         logger.error(f"Batch processing failed for source {source}: {result.get('error', 'Unknown error')}")
-                        all_success = False
-                if not all_success:
-                    return 1
+                        all_success = False # Mark overall process as failed if any source fails
+
+                if not all_success and not results: # If results is empty, it means something failed before any processing started
+                    return 1 # Exit if no sources were processed successfully at all
+            
             else:
                 # Single source: process directly
                 logger.info("Starting new batch processing")
@@ -245,17 +250,30 @@ def main():
                     output_destination=args.output_destination,
                     config_override=config_override
                 )
+                
                 if result.get("success", False):
                     logger.info("Batch processing completed successfully")
-                    logger.info(f"Processed {result.get('videos_downloaded', 0)} videos")
-                    logger.info(f"Validated {result.get('videos_validated', 0)} videos")
-                    logger.info(f"Uploaded {result.get('videos_uploaded', 0)} videos")
-                    logger.info(f"Total video duration: {result.get('video_hours', 0):.2f} hours")
+                    total_processed = result.get("videos_downloaded", 0)
+                    total_validated = result.get("videos_validated", 0)
+                    total_uploaded = result.get("videos_uploaded", 0)
+                    total_duration = result.get("video_hours", 0)
                 else:
                     logger.error(f"Batch processing failed: {result.get('error', 'Unknown error')}")
                     return 1
-        
-        return 0
+            
+            # Calculate failed videos
+            total_failed = total_processed - total_validated
+
+            # Log total results
+            logger.info("\n--- Overall Pipeline Summary ---")
+            logger.info(f"Total videos processed: {total_processed}")
+            logger.info(f"Total videos validated: {total_validated}")
+            logger.info(f"Total videos failed validation: {total_failed}")
+            logger.info(f"Total videos uploaded: {total_uploaded}")
+            logger.info(f"Total video duration: {total_duration:.2f} hours")
+            logger.info("------------------------------")
+
+            return 0
         
     except Exception as e:
         logger.exception(f"Error in pipeline: {str(e)}")
@@ -269,4 +287,3 @@ if __name__ == "__main__":
     logger = logging.getLogger("main")
     logger.info(f"Total pipeline execution time: {elapsed:.2f} seconds")
     sys.exit(exit_code)
-CloudStorageUploader
