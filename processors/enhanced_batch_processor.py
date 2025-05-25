@@ -101,7 +101,10 @@ class EnhancedBatchProcessor:
         try:
             if os.path.exists(self.state_file):
                 with open(self.state_file, "r") as f:
-                    return json.load(f)
+                    state = json.load(f)
+                    # Convert list to set for efficient lookup
+                    state['validated_videos'] = set(state.get('validated_videos', []))
+                    return state
             else:
                 # Create directory if it doesn't exist
                 os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
@@ -116,7 +119,8 @@ class EnhancedBatchProcessor:
             "total_videos_validated": 0,
             "total_videos_uploaded": 0,
             "total_videos_failed": 0,
-            "total_video_seconds": 0
+            "total_video_seconds": 0,
+            "validated_videos": set() # Initialize as an empty set
         }
     
     def _save_state(self):
@@ -129,8 +133,12 @@ class EnhancedBatchProcessor:
             self.state["total_videos_failed"] = self.total_videos_failed
             self.state["total_video_seconds"] = self.total_video_seconds
             
+            # Convert set to list for JSON serialization
+            state_to_save = self.state.copy()
+            state_to_save['validated_videos'] = list(self.state.get('validated_videos', set()))
+
             with open(self.state_file, "w") as f:
-                json.dump(self.state, f, indent=2)
+                json.dump(state_to_save, f, indent=2)
         except Exception as e:
             self.logger.error(f"Error saving state: {str(e)}")
     
@@ -190,6 +198,19 @@ class EnhancedBatchProcessor:
                         self.logger.debug(f"Removed temporary file: {file_path}")
                     except Exception as e:
                         self.logger.warning(f"Error removing file {file}: {str(e)}")
+            
+            # Clean up debug frames directory
+            debug_frames_dir = os.path.join(self.download_dir, "debug_frames")
+            if os.path.exists(debug_frames_dir):
+                self.logger.info(f"Cleaning up debug frames in {debug_frames_dir}")
+                for root, dirs, files in os.walk(debug_frames_dir):
+                    for file in files:
+                        try:
+                            file_path = os.path.join(root, file)
+                            os.remove(file_path)
+                            self.logger.debug(f"Removed debug frame file: {file_path}")
+                        except Exception as e:
+                            self.logger.warning(f"Error removing debug frame file {file}: {str(e)}")
             
             # Remove empty directories but skip top-level download/temp directories
             for directory in [self.download_dir, self.temp_dir]:
@@ -490,8 +511,16 @@ class EnhancedBatchProcessor:
                 
                 if download_result["success"]:
                     results["processed"] += 1
-                    future = executor.submit(self._validate_video, download_result["path"], video)
-                    validation_futures[future] = (video, download_result["path"])
+                    video_path = download_result["path"]
+                    if video_path in self.state.get('validated_videos', set()):
+                        self.logger.info(f"Video {os.path.basename(video_path)} already validated. Skipping.")
+                        # Optionally, handle results for skipped videos if needed
+                        results["validated"] += 1 # Count as validated since it was before
+                        results["uploaded"] += 1 # Count as uploaded/processed if it was before
+                        # Do not submit for validation again
+                    else:
+                        future = executor.submit(self._validate_video, download_result["path"], video)
+                        validation_futures[future] = (video, download_result["path"])
                 else:
                     results["failed"] += 1
             
@@ -501,6 +530,7 @@ class EnhancedBatchProcessor:
                 validation_result = future.result()
                 
                 if validation_result["success"]:
+                    self.state['validated_videos'].add(path) # Add to validated videos set
                     results["validated"] += 1
                     results["seconds"] += video.get("duration", 0)
                     self.total_video_seconds += video.get("duration", 0)
