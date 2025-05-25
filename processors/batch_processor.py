@@ -60,7 +60,8 @@ class BatchProcessor:
             if os.path.exists(path):
                 os.remove(path)
             parent_dir = os.path.dirname(path)
-            if os.path.isdir(parent_dir) and not os.listdir(parent_dir):
+            # Add check to prevent deleting the main download directory
+            if os.path.isdir(parent_dir) and not os.listdir(parent_dir) and parent_dir != self.download_dir:
                 os.rmdir(parent_dir)
         except Exception as e:
             self.logger.warning(f"Failed to clean up {path}: {e}")
@@ -308,10 +309,9 @@ class BatchProcessor:
                     download_path = os.path.join(self.download_dir, download_filename)
                 # Cleanup if this was a chunk file
                 if download_path and "chunks" in download_path:
-                    self._safe_cleanup(download_path)
-                # Additional cleanup if enabled
-                if download_path and True:
-                    self._safe_cleanup(download_path)
+                    # Only cleanup if the file actually exists before trying
+                    if os.path.exists(download_path):
+                        self._safe_cleanup(download_path)
                 return result
             
             scraper = self.scrapers[source]
@@ -330,10 +330,9 @@ class BatchProcessor:
                 download_path = os.path.join(self.download_dir, download_filename)
                 # Cleanup if this was a chunk file
                 if "chunks" in download_path:
-                    self._safe_cleanup(download_path)
-                # Additional cleanup if enabled
-                if True:
-                    self._safe_cleanup(download_path)
+                    # Only cleanup if the file actually exists before trying
+                    if os.path.exists(download_path):
+                        self._safe_cleanup(download_path)
                 return result
             
             # Determine file extension from URL or metadata
@@ -356,11 +355,8 @@ class BatchProcessor:
             if not download_success:
                 result["error"] = "Failed to download video"
                 result["failed"] = True
-                # Cleanup if this was a chunk file
-                if "chunks" in download_path:
-                    self._safe_cleanup(download_path)
-                # Additional cleanup if enabled
-                if True:
+                # Cleanup if download failed and file exists
+                if os.path.exists(download_path):
                     self._safe_cleanup(download_path)
                 return result
             
@@ -377,12 +373,7 @@ class BatchProcessor:
 
                 result["error"] = "Failed validation"
                 result["failed"] = True
-                # Cleanup if this was a chunk file
-                if "chunks" in download_path:
-                    self._safe_cleanup(download_path)
-                # Additional cleanup if enabled
-                if True:
-                    self._safe_cleanup(download_path)
+                # No cleanup needed here, file is moved to failed_dir
                 return result
             
             result["validated"] = True
@@ -399,11 +390,8 @@ class BatchProcessor:
             if not upload_result.get("success", False):
                 result["error"] = f"Failed to upload: {upload_result.get('error', 'Unknown error')}"
                 result["failed"] = True
-                # Cleanup if this was a chunk file
-                if "chunks" in download_path:
-                    self._safe_cleanup(download_path)
-                # Additional cleanup if enabled
-                if self.config.get("cleanup_after_upload", False):
+                # Cleanup original downloaded file only if upload failed and file exists
+                if os.path.exists(download_path):
                     self._safe_cleanup(download_path)
                 return result
             
@@ -420,19 +408,13 @@ class BatchProcessor:
             # Add cloud URL to result
             result["cloud_url"] = upload_result.get("url", "")
 
-            # Cleanup if this was a chunk file
-            if "chunks" in download_path:
-                self._safe_cleanup(download_path)
-            # Additional cleanup if enabled
-            if True:
-                self._safe_cleanup(download_path)
             return result
             
         except Exception as e:
             self.logger.error(f"Error processing video {video_metadata.get('id', 'unknown')}: {str(e)}")
             result["error"] = str(e)
             result["failed"] = True
-            # Try to cleanup chunk file if possible
+            # Cleanup downloaded file if an exception occurred and the file exists
             try:
                 source = video_metadata.get("source")
                 video_id = video_metadata.get("id", "unknown")
@@ -442,10 +424,10 @@ class BatchProcessor:
                 if source:
                     download_filename = f"{source}_{video_id}{extension}"
                     download_path = os.path.join(self.download_dir, download_filename)
-                    if "chunks" in download_path:
-                        self._safe_cleanup(download_path)
+                    if os.path.exists(download_path):
+                         self._safe_cleanup(download_path)
             except Exception:
-                pass
+                pass # Ignore errors during cleanup attempt
             return result
     
     def _ensure_disk_space(self):

@@ -214,7 +214,8 @@ class EnhancedBatchProcessor:
             
             # Check if parent directory is empty
             parent_dir = os.path.dirname(path)
-            if os.path.isdir(parent_dir) and not os.listdir(parent_dir):
+            # Add check to prevent deleting the main download directory
+            if os.path.isdir(parent_dir) and not os.listdir(parent_dir) and parent_dir != self.download_dir:
                 os.rmdir(parent_dir)
                 self.logger.debug(f"Removed empty directory: {parent_dir}")
         except Exception as e:
@@ -660,19 +661,52 @@ class EnhancedBatchProcessor:
             self.logger.info(f"Uploading video: {os.path.basename(video_path)}")
             
             # Upload to cloud storage using new API
-            upload_success, upload_url = self.cloud_uploader.upload_video(video_path, video_metadata)
+            upload_result = self.cloud_uploader.upload_video(video_path, video_metadata)
             
-            if not upload_success:
-                result["error"] = "Failed to upload video"
+            if not upload_result.get("success", False):
+                result["error"] = f"Failed to upload: {upload_result.get('error', 'Unknown error')}"
+                result["failed"] = True
+                # Cleanup original downloaded file only if upload failed and file exists
+                if os.path.exists(video_path):
+                    self._safe_cleanup(video_path)
                 return result
             
-            result["success"] = True
-            result["url"] = upload_url
+            result["uploaded"] = True
+            
+            # Move to processed directory
+            processed_path = os.path.join(self.processed_dir, os.path.basename(video_path))
+            shutil.move(video_path, processed_path)
+
+            # If not a chunk file, cleanup original downloaded file after successful processing
+            if "chunks" not in video_path and os.path.exists(video_path):
+                 self._safe_cleanup(video_path)
+
+            # Add cloud URL to result
+            result["cloud_url"] = upload_result.get("url", "")
+
+            # No need for unconditional cleanup here
+            # Cleanup if this was a chunk file is handled after moving to processed_dir
+            # Additional cleanup if enabled is handled above
             return result
             
         except Exception as e:
-            self.logger.error(f"Error uploading video: {str(e)}")
+            self.logger.error(f"Error processing video {video_metadata.get('id', 'unknown')}: {str(e)}")
             result["error"] = str(e)
+            result["failed"] = True
+            # Cleanup downloaded file if an exception occurred and the file exists
+            try:
+                source = video_metadata.get("source")
+                video_id = video_metadata.get("id", "unknown")
+                extension = video_metadata.get("format", "mp4").lower()
+                if not extension.startswith("."):
+                    extension = f".{extension}"
+                if source:
+                    download_filename = f"{source}_{video_id}{extension}"
+                    download_path = os.path.join(self.download_dir, download_filename)
+                    if os.path.exists(download_path):
+                        self._safe_cleanup(download_path)
+            except Exception:
+                pass # Ignore errors during cleanup attempt
             return result
     
     def resume_batch(self, batch_id: str) -> Dict[str, Any]:
