@@ -171,16 +171,6 @@ class EnhancedBatchProcessor:
         try:
             self.logger.info("Cleaning up temporary files")
             
-            # Clean up download directory
-            for root, dirs, files in os.walk(self.download_dir):
-                for file in files:
-                    try:
-                        file_path = os.path.join(root, file)
-                        os.remove(file_path)
-                        self.logger.debug(f"Removed temporary file: {file_path}")
-                    except Exception as e:
-                        self.logger.warning(f"Error removing file {file}: {str(e)}")
-            
             # Clean up temp directory
             for root, dirs, files in os.walk(self.temp_dir):
                 for file in files:
@@ -389,6 +379,33 @@ class EnhancedBatchProcessor:
                     end_idx = min(start_idx + self.batch_size, len(videos))
                     current_batch = videos[start_idx:end_idx]
                     self.logger.info(f"Processing batch {start_idx//self.batch_size + 1}/{(len(videos)-1)//self.batch_size + 1} ({len(current_batch)} videos)")
+
+                    # Calculate the potential total duration if we process the current batch
+                    current_batch_duration = sum(v.get('duration', 0) for v in current_batch)
+                    potential_total_seconds = self.total_video_seconds + current_batch_duration
+
+                    # Check if processing this batch would significantly exceed the target hours
+                    # We allow a small buffer (e.g., the duration of one batch) to avoid stopping prematurely
+                    expected_seconds = self.target_hours * 3600
+                    allowed_overshoot_seconds = self.batch_size * 60 # Assuming average video is 1 minute, adjust if needed
+
+                    if potential_total_seconds > expected_seconds + allowed_overshoot_seconds:
+                        self.logger.warning(f"Processing this batch would exceed target hours. Trimming batch.")
+                        # Determine how many videos to take from the current batch to get closer to the target
+                        cumulative_seconds_in_batch = 0
+                        trimmed_batch = []
+                        for video in current_batch:
+                            video_duration = video.get('duration', 0)
+                            if self.total_video_seconds + cumulative_seconds_in_batch + video_duration <= expected_seconds + allowed_overshoot_seconds:
+                                trimmed_batch.append(video)
+                                cumulative_seconds_in_batch += video_duration
+                            else:
+                                break
+                        current_batch = trimmed_batch
+                        if not current_batch:
+                            self.logger.info("Trimmed batch is empty, stopping processing.")
+                            break # Stop processing further batches from this scraping round
+
                     # Process batch with thread pool
                     batch_results = self._process_video_batch(current_batch)
                     # Update counters
@@ -407,14 +424,6 @@ class EnhancedBatchProcessor:
                     self._cleanup_temp_files()
                 # End of batch round
             batch_state["videos_found"] = total_videos_found
-            # Check if total_video_seconds is within 5% of target_hours * 3600
-            expected_seconds = self.target_hours * 3600
-            lower_bound = expected_seconds * 0.95
-            upper_bound = expected_seconds * 1.05
-            if not (lower_bound <= self.total_video_seconds <= upper_bound):
-                self.logger.warning(
-                    f"Total video duration ({self.total_video_seconds/3600:.2f} hours) is not within 5% of target ({self.target_hours} hours)"
-                )
             # Update final batch state
             batch_state["end_time"] = time.time()
             batch_state["status"] = "completed"
