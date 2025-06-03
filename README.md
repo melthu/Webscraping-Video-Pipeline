@@ -1,8 +1,8 @@
-# AfterQuery Video Collection Pipeline - README
+# Video Collection Pipeline - README
 
 ## Project Overview
 
-This project implements a complete pipeline for collecting, processing, and validating 1,000+ hours of video content. This project was developed as a solution to the AfterQuery SWE Intern Take Home assignment. The pipeline is designed to be scalable, modular, and robust, with careful attention to technical specifications and content requirements.
+This project implements a complete pipeline for collecting, processing, and validating 1,000+ hours of video content according to the
 
 ## Key Features
 
@@ -172,11 +172,3 @@ Note: Full validation requires valid API keys for the video platforms.
 ## Documentation
 
 For comprehensive documentation, see [documentation.md](documentation.md).
-
-## License
-
-This project is licensed under the [Choose Your License, e.g., MIT License] - see the LICENSE.md file for details.
-
-## Contributing
-
-Contributions are welcome! Please see the CONTRIBUTING.md for details on how to contribute to this project.
